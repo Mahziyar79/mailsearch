@@ -25,6 +25,27 @@ counter_lock = threading.Lock()
 total_emails = 0
 indexed_emails = 0
 
+def save_attachments(message, base_path, email_id):
+    attachments_info = []
+
+    if message.Attachments.Count > 0:
+        save_path = os.path.join(base_path, email_id)
+        os.makedirs(save_path, exist_ok=True)
+
+        for i in range(1, message.Attachments.Count + 1):
+            attachment = message.Attachments.Item(i)
+            filename = attachment.FileName
+            file_path = os.path.join(save_path, filename)
+            attachment.SaveAsFile(file_path)
+
+            attachments_info.append({
+                "filename": filename,
+                "filepath": file_path,
+                "size": os.path.getsize(file_path)
+            })
+
+    return attachments_info
+
 def clean_email_field(email_field):
     if email_field:
         return [email.strip("'") for email in email_field.split(';') if email.strip()]
@@ -56,7 +77,7 @@ def read_folder(folder, user_name):
                     sender = message.SenderName or ""
                     body = (message.Body or "").strip().replace('\n', '')
                     received = message.ReceivedTime
-
+                    attachments = save_attachments(message, r"D:\attachments", message.EntryID)
                     if isinstance(received, datetime):
                         received = received.strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -67,16 +88,15 @@ def read_folder(folder, user_name):
                         "to": clean_email_field(message.To),
                         "cc": clean_email_field(message.CC),
                         "date": received,
-                        "user": user_name
+                        "user": user_name,
+                        "attachments": attachments
                     }
 
                     bulk_actions.append({
                         "_index": "email_exchange",
                         "_source": email_doc
                     })
-
                     local_total += 1
-
                     if len(bulk_actions) >= BULK_SIZE:
                         index_bulk()
             except Exception as e:
