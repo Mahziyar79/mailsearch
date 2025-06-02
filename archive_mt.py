@@ -69,38 +69,43 @@ def read_folder(folder, user_name):
                 bulk_actions = []
 
     try:
-        messages = folder.Items
-        for message in messages:
-            try:
-                if message.Class == 43:
-                    subject = message.Subject or ""
-                    sender = message.SenderName or ""
-                    body = (message.Body or "").strip().replace('\n', '')
-                    received = message.ReceivedTime
-                    attachments = save_attachments(message, r"D:\attachments", message.EntryID)
-                    if isinstance(received, datetime):
-                        received = received.strftime("%Y-%m-%dT%H:%M:%S%z")
+        target_folders = ["inbox", "sent items", "deleted items", "drafts"]
+        folder_name = folder.Name.lower()
+        if folder_name in target_folders:
+            messages = folder.Items
+            for message in messages:
+                try:
+                    if message.Class == 43:
+                        subject = message.Subject or ""
+                        sender = message.SenderName or ""
+                        body = (message.Body or "").strip().replace('\n', '')
+                        received = message.ReceivedTime
+                        email = message.SenderEmailAddress
+                        attachments = save_attachments(message, r"D:\attachments", message.EntryID)
+                        if isinstance(received, datetime):
+                            received = received.strftime("%Y-%m-%dT%H:%M:%S%z")
 
-                    email_doc = {
-                        "subject": subject,
-                        "sender": sender,
-                        "body": body,
-                        "to": clean_email_field(message.To),
-                        "cc": clean_email_field(message.CC),
-                        "date": received,
-                        "user": user_name,
-                        "attachments": attachments
-                    }
+                        email_doc = {
+                            "subject": subject,
+                            "sender": sender,
+                            "body": body,
+                            "to": clean_email_field(message.To),
+                            "cc": clean_email_field(message.CC),
+                            "date": received,
+                            "user": user_name,
+                            "attachments": attachments,
+                            "email": email,
+                        }
 
-                    bulk_actions.append({
-                        "_index": "email_exchange",
-                        "_source": email_doc
-                    })
-                    local_total += 1
-                    if len(bulk_actions) >= BULK_SIZE:
-                        index_bulk()
-            except Exception as e:
-                print(f"Failed to process message: {e}")
+                        bulk_actions.append({
+                            "_index": "email_exchange",
+                            "_source": email_doc
+                        })
+                        local_total += 1
+                        if len(bulk_actions) >= BULK_SIZE:
+                            index_bulk()
+                except Exception as e:
+                    print(f"Failed to process message: {e}")
 
         index_bulk()
 
@@ -159,7 +164,7 @@ def process_pst_file(pst_path):
     extract_emails_from_pst(pst_path, folder_name)
 
 # مسیر فولدر اصلی
-base_dir = r"D:\test"
+base_dir = r"D:\test2"
 
 # جمع‌آوری فایل‌های PST
 pst_files = []
