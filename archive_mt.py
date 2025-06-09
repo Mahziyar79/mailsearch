@@ -66,10 +66,11 @@ def extract_cn(distinguished_name):
         return distinguished_name.split("CN=")[1].split(",")[0]
     return ""
 
-def save_attachments(message, base_path, email_id):
+def save_attachments(message, base_path, user_name, email_id):
     attachments_info = []
     if message.Attachments.Count > 0:
-        save_path = os.path.join(base_path, email_id)
+        user_folder = os.path.join(base_path, user_name)
+        save_path = os.path.join(user_folder, email_id)
         os.makedirs(save_path, exist_ok=True)
         for i in range(1, message.Attachments.Count + 1):
             attachment = message.Attachments.Item(i)
@@ -126,7 +127,7 @@ def read_folder(folder, user_name):
                                 email_o_clean = str(email_o).lower().strip()
                         except Exception as ex:
                             pass
-                        attachments = save_attachments(message, r"D:\\attachments", message.EntryID)
+                        attachments = save_attachments(message, r"D:\\attachments", user_name, message.EntryID)
                         if isinstance(received, datetime):
                             received = received.strftime("%Y-%m-%dT%H:%M:%S%z")
 
