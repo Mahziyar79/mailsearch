@@ -9,6 +9,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from ldap3 import Server, Connection, ALL, SUBTREE
 from dotenv import load_dotenv
+import mimetypes
+
+import xlrd
+# Additional imports for content extraction
+import PyPDF2
+import docx
+import openpyxl
 
 load_dotenv()
 
@@ -61,6 +68,38 @@ counter_lock = threading.Lock()
 total_emails = 0
 indexed_emails = 0
 
+def extract_text_from_file(file_path):
+    mime_type, _ = mimetypes.guess_type(file_path)
+    text = ""
+
+    try:
+        if mime_type == 'application/pdf':
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                text = "\n".join([page.extract_text() or "" for page in reader.pages])
+
+        elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+            doc = docx.Document(file_path)
+            text = "\n".join([p.text for p in doc.paragraphs])
+
+        elif mime_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+            wb = openpyxl.load_workbook(file_path, data_only=True)
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    text += " ".join([str(cell) if cell is not None else '' for cell in row]) + "\n"
+
+        elif mime_type == 'application/vnd.ms-excel':
+            wb = xlrd.open_workbook(file_path)
+            for sheet in wb.sheets():
+                for row_idx in range(sheet.nrows):
+                    row_values = sheet.row_values(row_idx)
+                    text += " ".join([str(cell) for cell in row_values]) + "\n"
+
+    except Exception as e:
+        print(f"[!] Error extracting text from {file_path}: {e}")
+
+    return text.strip()
+
 def extract_cn(distinguished_name):
     if distinguished_name and "CN=" in distinguished_name:
         return distinguished_name.split("CN=")[1].split(",")[0]
@@ -77,11 +116,19 @@ def save_attachments(message, base_path, user_name, email_id):
             filename = attachment.FileName
             file_path = os.path.join(save_path, filename)
             attachment.SaveAsFile(file_path)
-            attachments_info.append({
+
+            attachment_data = {
                 "filename": filename,
                 "filepath": file_path,
-                "size": os.path.getsize(file_path)
-            })
+                "size": os.path.getsize(file_path),
+            }
+
+            # اضافه کردن متن ضمیمه اگر قابل استخراج بود
+            extracted_text = extract_text_from_file(file_path)
+            if extracted_text:
+                attachment_data["text"] = extracted_text
+
+            attachments_info.append(attachment_data)
     return attachments_info
 
 def clean_email_field(email_field):
