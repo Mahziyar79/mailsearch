@@ -12,12 +12,26 @@ from dotenv import load_dotenv
 import mimetypes
 import logging
 import xlrd
-# Additional imports for content extraction
 import PyPDF2
 import docx
 import openpyxl
+from io import BytesIO
+from minio import Minio
+import tempfile
 
 load_dotenv()
+
+# اتصال به MinIO
+minio_client = Minio(
+    "127.0.0.1:9000",
+    access_key="minioadmin",
+    secret_key="minioadmin",
+    secure=False 
+)
+
+bucket_name = "email-attachments"
+if not minio_client.bucket_exists(bucket_name):
+    minio_client.make_bucket(bucket_name)
 
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)  
@@ -75,8 +89,11 @@ MAX_WORKERS = 4
 
 outlook_lock = threading.Lock()
 counter_lock = threading.Lock()
+bulk_lock = threading.Lock()
+
 total_emails = 0
 indexed_emails = 0
+
 
 def extract_text_from_file(file_path):
     import traceback
@@ -124,30 +141,38 @@ def extract_cn(distinguished_name):
         return distinguished_name.split("CN=")[1].split(",")[0]
     return ""
 
-def save_attachments(message, base_path, user_name, email_id):
+def save_attachments(message, user_name, email_id):
     attachments_info = []
-    if message.Attachments.Count > 0:
-        user_folder = os.path.join(base_path, user_name)
-        save_path = os.path.join(user_folder, email_id)
-        os.makedirs(save_path, exist_ok=True)
-        for i in range(1, message.Attachments.Count + 1):
+
+    for i in range(1, message.Attachments.Count + 1):
+        try:
             attachment = message.Attachments.Item(i)
             filename = attachment.FileName
-            file_path = os.path.join(save_path, filename)
-            attachment.SaveAsFile(file_path)
+            file_ext = os.path.splitext(filename)[1]
+            object_name = f"{user_name}/{email_id}{file_ext}"
+            minio_url = f"http://172.16.55.24:53716/browser/{bucket_name}/{object_name}"
 
-            attachment_data = {
+            temp_path = os.path.join(tempfile.gettempdir(), filename)
+            attachment.SaveAsFile(temp_path)
+
+            with open(temp_path, "rb") as f:
+                content = f.read()
+
+            minio_client.put_object(bucket_name, object_name, data=BytesIO(content), length=len(content))
+            extracted_text = extract_text_from_file(temp_path)
+            os.remove(temp_path)
+
+            attachments_info.append({
                 "filename": filename,
-                "filepath": file_path,
-                "size": os.path.getsize(file_path),
-            }
+                "filepath": minio_url,
+                "size": len(content),
+                **({"text": extracted_text} if extracted_text else {})
+            })
 
-            # اضافه کردن متن ضمیمه اگر قابل استخراج بود
-            extracted_text = extract_text_from_file(file_path)
-            if extracted_text:
-                attachment_data["text"] = extracted_text
+        except Exception as e:
+            logging.error(f"Error processing attachment {filename}: {e}")
+            continue
 
-            attachments_info.append(attachment_data)
     return attachments_info
 
 def clean_email_field(email_field):
@@ -160,17 +185,18 @@ def read_folder(folder, user_name):
     local_total = 0
     local_indexed = 0
 
-    def index_bulk():
+    def safe_index_bulk():
         nonlocal bulk_actions, local_indexed
-        if bulk_actions:
-            try:
-                result = bulk(es, bulk_actions, stats_only=False)
-                print(f"Bulk result: {result}")
-                local_indexed += len(bulk_actions)
-            except Exception as e:
-                logging.error(f"Bulk index failed: {e}")
-            finally:
-                bulk_actions = []
+        with bulk_lock:
+            if bulk_actions:
+                try:
+                    result = bulk(es, bulk_actions, stats_only=False)
+                    print(f"Bulk result: {result}")
+                    local_indexed += len(bulk_actions)
+                except Exception as e:
+                    logging.error(f"Bulk index failed: {e}")
+                finally:
+                    bulk_actions = []
 
     try:
         target_folders = ["inbox", "sent items", "deleted items"]
@@ -193,7 +219,8 @@ def read_folder(folder, user_name):
                                 email_o_clean = str(email_o).lower().strip()
                         except Exception as ex:
                             pass
-                        attachments = save_attachments(message, r"D:\\attachments", user_name, message.EntryID)
+                        attachments = save_attachments(message,user_name, message.EntryID)
+
                         if isinstance(received, datetime):
                             received = received.strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -224,11 +251,11 @@ def read_folder(folder, user_name):
                         })
                         local_total += 1
                         if len(bulk_actions) >= BULK_SIZE:
-                            index_bulk()
+                            safe_index_bulk()
                 except Exception as e:
                     logging.error(f"Failed to process message: {e}")
 
-        index_bulk()
+        safe_index_bulk()
 
         for sub_folder in folder.Folders:
             sub_total, sub_indexed = read_folder(sub_folder, user_name)
@@ -287,14 +314,25 @@ def process_pst_file(pst_path):
     folder_name = os.path.basename(os.path.dirname(pst_path))
     print(f"Processing {pst_path}")
     extract_emails_from_pst(pst_path, folder_name)
+    with open("processed_pst.txt", "a", encoding="utf-8") as f:
+        f.write(pst_path + "\n")
 
 base_dir = r"D:\\test2"
+
+processed_file_path = "processed_pst.txt"
+processed_files = set()
+
+if os.path.exists(processed_file_path):
+    with open(processed_file_path, "r", encoding="utf-8") as f:
+        processed_files = set(line.strip() for line in f if line.strip())
+        
 pst_files = []
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         if file.endswith(".pst"):
             full_path = os.path.join(root, file)
-            pst_files.append(full_path)
+            if full_path not in processed_files:
+                pst_files.append(full_path)
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
     executor.map(process_pst_file, pst_files)
