@@ -150,7 +150,7 @@ def save_attachments(message, user_name, email_id):
             filename = attachment.FileName
             file_ext = os.path.splitext(filename)[1]
             object_name = f"{user_name}/{email_id}{file_ext}"
-            minio_url = f"http://172.16.55.24:53716/browser/{bucket_name}/{object_name}"
+            minio_url = f"http://172.16.55.24:9001/browser/{bucket_name}/{object_name}"
 
             temp_path = os.path.join(tempfile.gettempdir(), filename)
             attachment.SaveAsFile(temp_path)
